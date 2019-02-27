@@ -21,10 +21,12 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenResponse;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
+import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 import java.util.Set;
@@ -64,7 +66,17 @@ public class WebClientReactiveClientCredentialsTokenResponseClient implements Re
 					.headers(headers(clientRegistration))
 					.body(body)
 					.exchange()
-					.flatMap(response -> response.body(oauth2AccessTokenResponse()))
+					.flatMap(response ->{
+						if (!response.statusCode().is2xxSuccessful()){
+							// extract the contents of this into a method named oauth2AccessTokenResponse but has an argument for the response
+							throw WebClientResponseException.create(response.rawStatusCode(),
+											"Cannot get token, expected 2xx HTTP Status code",
+											null,
+											null,
+											null
+									);
+						}
+						return response.body(oauth2AccessTokenResponse()); })
 					.map(response -> {
 						if (response.getAccessToken().getScopes().isEmpty()) {
 							response = OAuth2AccessTokenResponse.withResponse(response)
@@ -100,5 +112,10 @@ public class WebClientReactiveClientCredentialsTokenResponseClient implements Re
 			body.with(OAuth2ParameterNames.CLIENT_SECRET, clientRegistration.getClientSecret());
 		}
 		return body;
+	}
+
+	public void setWebClient(WebClient webClient) {
+		Assert.notNull(webClient, "webClient cannot be null");
+		this.webClient = webClient;
 	}
 }

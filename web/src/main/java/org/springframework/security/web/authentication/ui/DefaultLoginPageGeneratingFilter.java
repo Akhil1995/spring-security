@@ -272,7 +272,7 @@ public class DefaultLoginPageGeneratingFilter extends GenericFilterBean {
 		}
 
 		if (oauth2LoginEnabled) {
-			sb.append("<h2 class=\"form-signin-heading\">Login with OAuth 2.0</h3>");
+			sb.append("<h2 class=\"form-signin-heading\">Login with OAuth 2.0</h2>");
 			sb.append(createError(loginError, errorMsg));
 			sb.append(createLogoutSuccess(logoutSuccess));
 			sb.append("<table class=\"table table-striped\">\n");
@@ -285,9 +285,9 @@ public class DefaultLoginPageGeneratingFilter extends GenericFilterBean {
 				sb.append("</a>");
 				sb.append("</td></tr>\n");
 			}
-			sb.append("</table></div>\n");
+			sb.append("</table>\n");
 		}
-
+		sb.append("</div>\n");
 		sb.append("</body></html>");
 
 		return sb.toString();

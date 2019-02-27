@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2018 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 import static org.springframework.security.oauth2.core.web.reactive.function.OAuth2BodyExtractors.oauth2AccessTokenResponse;
@@ -84,8 +85,12 @@ public final class ServerOAuth2AuthorizedClientExchangeFilterFunction implements
 	private final OAuth2AuthorizedClientResolver authorizedClientResolver;
 
 	public ServerOAuth2AuthorizedClientExchangeFilterFunction(ReactiveClientRegistrationRepository clientRegistrationRepository, ServerOAuth2AuthorizedClientRepository authorizedClientRepository) {
+		this(authorizedClientRepository, new OAuth2AuthorizedClientResolver(clientRegistrationRepository, authorizedClientRepository));
+	}
+
+	ServerOAuth2AuthorizedClientExchangeFilterFunction(ServerOAuth2AuthorizedClientRepository authorizedClientRepository, OAuth2AuthorizedClientResolver authorizedClientResolver) {
 		this.authorizedClientRepository = authorizedClientRepository;
-		this.authorizedClientResolver = new OAuth2AuthorizedClientResolver(clientRegistrationRepository, authorizedClientRepository);
+		this.authorizedClientResolver = authorizedClientResolver;
 	}
 
 	/**
@@ -245,15 +250,33 @@ public final class ServerOAuth2AuthorizedClientExchangeFilterFunction implements
 	}
 
 	private Mono<OAuth2AuthorizedClient> refreshIfNecessary(ClientRequest request, ExchangeFunction next, OAuth2AuthorizedClient authorizedClient) {
-		if (shouldRefresh(authorizedClient)) {
+		ClientRegistration clientRegistration = authorizedClient.getClientRegistration();
+		if (isClientCredentialsGrantType(clientRegistration) && hasTokenExpired(authorizedClient)) {
 			return createRequest(request)
-				.flatMap(r -> refreshAuthorizedClient(next, authorizedClient, r));
+					.flatMap(r -> authorizeWithClientCredentials(clientRegistration, r));
+		} else if (shouldRefreshToken(authorizedClient)) {
+			return createRequest(request)
+				.flatMap(r -> authorizeWithRefreshToken(next, authorizedClient, r));
 		}
 		return Mono.just(authorizedClient);
 	}
 
-	private Mono<OAuth2AuthorizedClient> refreshAuthorizedClient(ExchangeFunction next,
-			OAuth2AuthorizedClient authorizedClient, OAuth2AuthorizedClientResolver.Request r) {
+	private boolean isClientCredentialsGrantType(ClientRegistration clientRegistration) {
+		return AuthorizationGrantType.CLIENT_CREDENTIALS.equals(clientRegistration.getAuthorizationGrantType());
+	}
+
+	private Mono<OAuth2AuthorizedClient> authorizeWithClientCredentials(ClientRegistration clientRegistration, OAuth2AuthorizedClientResolver.Request request) {
+		Authentication authentication = request.getAuthentication();
+		ServerWebExchange exchange = request.getExchange();
+
+		return this.authorizedClientResolver.clientCredentials(clientRegistration, authentication, exchange).
+				flatMap(result -> this.authorizedClientRepository.saveAuthorizedClient(result, authentication, exchange)
+						.thenReturn(result));
+	}
+
+	private Mono<OAuth2AuthorizedClient> authorizeWithRefreshToken(ExchangeFunction next,
+																	OAuth2AuthorizedClient authorizedClient,
+																	OAuth2AuthorizedClientResolver.Request r) {
 		ServerWebExchange exchange = r.getExchange();
 		Authentication authentication = r.getAuthentication();
 		ClientRegistration clientRegistration = authorizedClient
@@ -267,12 +290,16 @@ public final class ServerOAuth2AuthorizedClientExchangeFilterFunction implements
 				.build();
 		return next.exchange(refreshRequest)
 				.flatMap(refreshResponse -> refreshResponse.body(oauth2AccessTokenResponse()))
-				.map(accessTokenResponse -> new OAuth2AuthorizedClient(authorizedClient.getClientRegistration(), authorizedClient.getPrincipalName(), accessTokenResponse.getAccessToken(), accessTokenResponse.getRefreshToken()))
+				.map(accessTokenResponse -> {
+					OAuth2RefreshToken refreshToken = Optional.ofNullable(accessTokenResponse.getRefreshToken())
+							.orElse(authorizedClient.getRefreshToken());
+					return new OAuth2AuthorizedClient(authorizedClient.getClientRegistration(), authorizedClient.getPrincipalName(), accessTokenResponse.getAccessToken(), refreshToken);
+				})
 				.flatMap(result -> this.authorizedClientRepository.saveAuthorizedClient(result, authentication, exchange)
 						.thenReturn(result));
 	}
 
-	private boolean shouldRefresh(OAuth2AuthorizedClient authorizedClient) {
+	private boolean shouldRefreshToken(OAuth2AuthorizedClient authorizedClient) {
 		if (this.authorizedClientRepository == null) {
 			return false;
 		}
@@ -280,6 +307,10 @@ public final class ServerOAuth2AuthorizedClientExchangeFilterFunction implements
 		if (refreshToken == null) {
 			return false;
 		}
+		return hasTokenExpired(authorizedClient);
+	}
+
+	private boolean hasTokenExpired(OAuth2AuthorizedClient authorizedClient) {
 		Instant now = this.clock.instant();
 		Instant expiresAt = authorizedClient.getAccessToken().getExpiresAt();
 		if (now.isAfter(expiresAt.minus(this.accessTokenExpiresSkew))) {

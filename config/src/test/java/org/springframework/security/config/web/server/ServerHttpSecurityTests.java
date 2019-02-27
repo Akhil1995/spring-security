@@ -61,6 +61,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
+import org.springframework.security.web.server.context.SecurityContextServerWebExchangeWebFilter;
+import org.springframework.web.server.WebFilterChain;
+import org.springframework.security.web.server.authentication.AnonymousAuthenticationWebFilterTests;
+import org.springframework.security.web.server.authentication.HttpBasicServerAuthenticationEntryPoint;
 
 /**
  * @author Rob Winch
@@ -190,6 +194,91 @@ public class ServerHttpSecurityTests {
 				.isEqualTo(Arrays.asList(SecurityContextServerLogoutHandler.class, CsrfServerLogoutHandler.class));
 	}
 
+	@Test
+	@SuppressWarnings("unchecked")
+	public void addFilterAfterIsApplied(){
+		SecurityWebFilterChain securityWebFilterChain =  this.http.addFilterAfter(new TestWebFilter(), SecurityWebFiltersOrder.SECURITY_CONTEXT_SERVER_WEB_EXCHANGE).build();
+		List filters = securityWebFilterChain.getWebFilters().map(WebFilter::getClass).collectList().block();
+
+		assertThat(filters).isNotNull()
+				.isNotEmpty()
+				.containsSequence(SecurityContextServerWebExchangeWebFilter.class, TestWebFilter.class);
+
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void addFilterBeforeIsApplied(){
+		SecurityWebFilterChain securityWebFilterChain =  this.http.addFilterBefore(new TestWebFilter(), SecurityWebFiltersOrder.SECURITY_CONTEXT_SERVER_WEB_EXCHANGE).build();
+		List filters = securityWebFilterChain.getWebFilters().map(WebFilter::getClass).collectList().block();
+
+		assertThat(filters).isNotNull()
+				.isNotEmpty()
+				.containsSequence(TestWebFilter.class, SecurityContextServerWebExchangeWebFilter.class);
+
+	}
+
+	@Test
+	public void anonymous(){
+		SecurityWebFilterChain securityFilterChain = this.http.anonymous().and().build();
+		WebTestClient client = WebTestClientBuilder.bindToControllerAndWebFilters(AnonymousAuthenticationWebFilterTests.HttpMeController.class,
+				securityFilterChain).build();
+
+		client.get()
+				.uri("/me")
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(String.class).isEqualTo("anonymousUser");
+
+	}
+
+	@Test
+	public void basicWithAnonymous() {
+		given(this.authenticationManager.authenticate(any())).willReturn(Mono.just(new TestingAuthenticationToken("rob", "rob", "ROLE_USER", "ROLE_ADMIN")));
+
+		this.http.securityContextRepository(new WebSessionServerSecurityContextRepository());
+		this.http.httpBasic().and().anonymous();
+		this.http.authenticationManager(this.authenticationManager);
+		ServerHttpSecurity.AuthorizeExchangeSpec authorize = this.http.authorizeExchange();
+		authorize.anyExchange().hasAuthority("ROLE_ADMIN");
+
+		WebTestClient client = buildClient();
+
+		EntityExchangeResult<String> result = client.get()
+				.uri("/")
+				.headers(headers -> headers.setBasicAuth("rob", "rob"))
+				.exchange()
+				.expectStatus().isOk()
+				.expectHeader().valueMatches(HttpHeaders.CACHE_CONTROL, ".+")
+				.expectBody(String.class).consumeWith(b -> assertThat(b.getResponseBody()).isEqualTo("ok"))
+				.returnResult();
+
+		assertThat(result.getResponseCookies().getFirst("SESSION")).isNull();
+	}
+
+	@Test
+	public void basicWithCustomRealmName() {
+		this.http.securityContextRepository(new WebSessionServerSecurityContextRepository());
+		HttpBasicServerAuthenticationEntryPoint authenticationEntryPoint = new HttpBasicServerAuthenticationEntryPoint();
+		authenticationEntryPoint.setRealm("myrealm");
+		this.http.httpBasic().authenticationEntryPoint(authenticationEntryPoint);
+		this.http.authenticationManager(this.authenticationManager);
+		ServerHttpSecurity.AuthorizeExchangeSpec authorize = this.http.authorizeExchange();
+		authorize.anyExchange().authenticated();
+
+		WebTestClient client = buildClient();
+
+		EntityExchangeResult<String> result = client.get()
+				.uri("/")
+				.exchange()
+				.expectStatus().isUnauthorized()
+				.expectHeader().value(HttpHeaders.WWW_AUTHENTICATE, value -> assertThat(value).contains("myrealm"))
+				.expectBody(String.class)
+				.returnResult();
+
+		assertThat(result.getResponseCookies().getFirst("SESSION")).isNull();
+	}
+
 	private <T extends WebFilter> Optional<T> getWebFilter(SecurityWebFilterChain filterChain, Class<T> filterClass) {
 		return (Optional<T>) filterChain.getWebFilters()
 				.filter(Objects::nonNull)
@@ -212,6 +301,13 @@ public class ServerHttpSecurityTests {
 				.filter(c -> c.hasKey(ServerWebExchange.class))
 				.map(c -> c.get(ServerWebExchange.class))
 				.map(e -> e.getRequest().getPath().pathWithinApplication().value());
+		}
+	}
+
+	private static class TestWebFilter implements WebFilter {
+		@Override
+		public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+			return chain.filter(exchange);
 		}
 	}
 }

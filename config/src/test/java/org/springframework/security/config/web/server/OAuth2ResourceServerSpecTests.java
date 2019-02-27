@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2018 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.springframework.security.config.web.server;
 
 import java.io.IOException;
@@ -23,11 +24,18 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.RSAPublicKeySpec;
 import java.time.Instant;
+import java.util.Base64;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import javax.annotation.PreDestroy;
 
+import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.apache.http.HttpHeaders;
 import org.junit.Rule;
 import org.junit.Test;
@@ -39,16 +47,28 @@ import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.authentication.ReactiveAuthenticationManager;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.test.SpringTestRule;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.jose.jws.JwsAlgorithms;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.security.oauth2.server.resource.BearerTokenAuthenticationToken;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.ReactiveJwtAuthenticationConverterAdapter;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.authentication.HttpStatusServerEntryPoint;
+import org.springframework.security.web.server.authentication.ServerAuthenticationConverter;
+import org.springframework.security.web.server.authorization.HttpStatusServerAccessDeniedHandler;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -95,6 +115,22 @@ public class OAuth2ResourceServerSpecTests {
 	private Jwt jwt = new Jwt("token", Instant.MIN, Instant.MAX,
 			Collections.singletonMap("alg", JwsAlgorithms.RS256),
 			Collections.singletonMap("sub", "user"));
+
+	private String clientId = "client";
+	private String clientSecret = "secret";
+	private String active = "{\n" +
+			"      \"active\": true,\n" +
+			"      \"client_id\": \"l238j323ds-23ij4\",\n" +
+			"      \"username\": \"jdoe\",\n" +
+			"      \"scope\": \"read write dolphin\",\n" +
+			"      \"sub\": \"Z5O3upPC88QrAjx00dis\",\n" +
+			"      \"aud\": \"https://protected.example.net/resource\",\n" +
+			"      \"iss\": \"https://server.example.com/\",\n" +
+			"      \"exp\": 1419356238,\n" +
+			"      \"iat\": 1419350238,\n" +
+			"      \"extension_field\": \"twenty-seven\"\n" +
+			"     }";
+
 
 	@Rule
 	public final SpringTestRule spring = new SpringTestRule();
@@ -214,6 +250,47 @@ public class OAuth2ResourceServerSpecTests {
 	}
 
 	@Test
+	public void getWhenCustomBearerTokenServerAuthenticationConverterThenResponds() {
+		this.spring.register(CustomBearerTokenServerAuthenticationConverter.class, RootController.class).autowire();
+
+		this.client.get()
+				.cookie("TOKEN", this.messageReadToken)
+				.exchange()
+				.expectStatus().isOk();
+	}
+
+	@Test
+	public void getWhenSignedAndCustomConverterThenConverts() {
+		this.spring.register(CustomJwtAuthenticationConverterConfig.class, RootController.class).autowire();
+
+		this.client.get()
+				.headers(headers -> headers.setBearerAuth(this.messageReadToken))
+				.exchange()
+				.expectStatus().isOk();
+	}
+
+	@Test
+	public void getWhenCustomBearerTokenEntryPointThenResponds() {
+		this.spring.register(CustomErrorHandlingConfig.class).autowire();
+
+		this.client.get()
+				.uri("/authenticated")
+				.exchange()
+				.expectStatus().isEqualTo(HttpStatus.I_AM_A_TEAPOT);
+	}
+
+	@Test
+	public void getWhenCustomBearerTokenDeniedHandlerThenResponds() {
+		this.spring.register(CustomErrorHandlingConfig.class).autowire();
+
+		this.client.get()
+				.uri("/unobtainable")
+				.headers(headers -> headers.setBearerAuth(this.messageReadToken))
+				.exchange()
+				.expectStatus().isEqualTo(HttpStatus.BANDWIDTH_LIMIT_EXCEEDED);
+	}
+
+	@Test
 	public void getJwtDecoderWhenBeanWiredAndDslWiredThenDslTakesPrecedence() {
 		GenericWebApplicationContext context = autowireWebServerGenericWebApplicationContext();
 		ServerHttpSecurity http = new ServerHttpSecurity();
@@ -272,6 +349,18 @@ public class OAuth2ResourceServerSpecTests {
 
 		assertThatCode(() -> jwt.getJwtDecoder())
 				.isInstanceOf(NoSuchBeanDefinitionException.class);
+	}
+
+	@Test
+	public void introspectWhenValidThenReturnsOk() {
+		this.spring.register(IntrospectionConfig.class, RootController.class).autowire();
+		this.spring.getContext().getBean(MockWebServer.class)
+				.setDispatcher(requiresAuth(clientId, clientSecret, active));
+
+		this.client.get()
+				.headers(headers -> headers.setBearerAuth(this.messageReadToken))
+				.exchange()
+				.expectStatus().isOk();
 	}
 
 	@EnableWebFlux
@@ -386,6 +475,118 @@ public class OAuth2ResourceServerSpecTests {
 		}
 	}
 
+	@EnableWebFlux
+	@EnableWebFluxSecurity
+	static class CustomBearerTokenServerAuthenticationConverter {
+		@Bean
+		SecurityWebFilterChain springSecurity(ServerHttpSecurity http) throws Exception {
+			// @formatter:off
+			http
+				.authorizeExchange()
+					.anyExchange().hasAuthority("SCOPE_message:read")
+					.and()
+				.oauth2ResourceServer()
+					.bearerTokenConverter(bearerTokenAuthenticationConverter())
+					.jwt()
+						.publicKey(publicKey());
+			// @formatter:on
+
+			return http.build();
+		}
+
+		@Bean
+		ServerAuthenticationConverter bearerTokenAuthenticationConverter() {
+			return exchange -> Mono.justOrEmpty(exchange.getRequest().getCookies().getFirst("TOKEN").getValue())
+					.map(BearerTokenAuthenticationToken::new);
+		}
+	}
+
+	@EnableWebFlux
+	@EnableWebFluxSecurity
+	static class CustomJwtAuthenticationConverterConfig {
+		@Bean
+		SecurityWebFilterChain springSecurity(ServerHttpSecurity http) throws Exception {
+			// @formatter:off
+			http
+				.authorizeExchange()
+					.anyExchange().hasAuthority("message:read")
+					.and()
+				.oauth2ResourceServer()
+					.jwt()
+						.jwtAuthenticationConverter(jwtAuthenticationConverter())
+						.publicKey(publicKey());
+			// @formatter:on
+
+			return http.build();
+		}
+
+		@Bean
+		Converter<Jwt, Mono<AbstractAuthenticationToken>> jwtAuthenticationConverter() {
+			JwtAuthenticationConverter converter = new JwtAuthenticationConverter() {
+				@Override
+				protected Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {
+					String[] claims = ((String) jwt.getClaims().get("scope")).split(" ");
+					return Stream.of(claims).map(SimpleGrantedAuthority::new).collect(Collectors.toList());
+				}
+			};
+
+			return new ReactiveJwtAuthenticationConverterAdapter(converter);
+		}
+	}
+
+	@EnableWebFlux
+	@EnableWebFluxSecurity
+	static class CustomErrorHandlingConfig {
+		@Bean
+		SecurityWebFilterChain springSecurity(ServerHttpSecurity http) throws Exception {
+			// @formatter:off
+			http
+				.authorizeExchange()
+					.pathMatchers("/authenticated").authenticated()
+					.pathMatchers("/unobtainable").hasAuthority("unobtainable")
+					.and()
+				.oauth2ResourceServer()
+					.accessDeniedHandler(new HttpStatusServerAccessDeniedHandler(HttpStatus.BANDWIDTH_LIMIT_EXCEEDED))
+					.authenticationEntryPoint(new HttpStatusServerEntryPoint(HttpStatus.I_AM_A_TEAPOT))
+					.jwt()
+						.publicKey(publicKey());
+			// @formatter:on
+
+			return http.build();
+		}
+	}
+
+	@EnableWebFlux
+	@EnableWebFluxSecurity
+	static class IntrospectionConfig {
+		private MockWebServer mockWebServer = new MockWebServer();
+
+		@Bean
+		SecurityWebFilterChain springSecurity(ServerHttpSecurity http) {
+			String introspectionUri = mockWebServer().url("/introspect").toString();
+
+			// @formatter:off
+			http
+				.oauth2ResourceServer()
+					.opaqueToken()
+						.introspectionUri(introspectionUri)
+						.introspectionClientCredentials("client", "secret");
+			// @formatter:on
+
+			return http.build();
+		}
+
+		@Bean
+		MockWebServer mockWebServer() {
+			return this.mockWebServer;
+		}
+
+		@PreDestroy
+		void shutdown() throws IOException {
+			this.mockWebServer.shutdown();
+		}
+	}
+
 	@RestController
 	static class RootController {
 		@GetMapping
@@ -397,6 +598,33 @@ public class OAuth2ResourceServerSpecTests {
 		Mono<String> post() {
 			return Mono.just("ok");
 		}
+	}
+
+	private static Dispatcher requiresAuth(String username, String password, String response) {
+		return new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) {
+				String authorization = request.getHeader(org.springframework.http.HttpHeaders.AUTHORIZATION);
+				return Optional.ofNullable(authorization)
+						.filter(a -> isAuthorized(authorization, username, password))
+						.map(a -> ok(response))
+						.orElse(unauthorized());
+			}
+		};
+	}
+
+	private static boolean isAuthorized(String authorization, String username, String password) {
+		String[] values = new String(Base64.getDecoder().decode(authorization.substring(6))).split(":");
+		return username.equals(values[0]) && password.equals(values[1]);
+	}
+
+	private static MockResponse ok(String response) {
+		return new MockResponse().setBody(response)
+				.setHeader(org.springframework.http.HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
+	}
+
+	private static MockResponse unauthorized() {
+		return new MockResponse().setResponseCode(401);
 	}
 
 	private static RSAPublicKey publicKey() throws NoSuchAlgorithmException, InvalidKeySpecException {

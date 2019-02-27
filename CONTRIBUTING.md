@@ -47,7 +47,7 @@ Create your topic branch to be submitted as a pull request from master. The Spri
 # Use short branch names
 Branches used when submitting pull requests should preferably be named according to GitHub issues, e.g. 'gh-1234' or 'gh-1234-fix-npe'. Otherwise, use succinct, lower-case, dash (-) delimited names, such as 'fix-warnings', 'fix-typo', etc. This is important, because branch names show up in the merge commits that result from accepting pull requests, and should be as expressive and concise as possible.
 
-#Keep commits focused
+# Keep commits focused
 
 Remember each ticket should be focused on a single item of interest since the tickets are used to produce the changelog. Since each commit should be tied to a single GitHub issue, ensure that your commits are focused. For example, do not include an update to a transitive library in your commit unless the GitHub is to update the library. Reviewing your commits is essential before sending a pull request.
 
@@ -125,7 +125,7 @@ Update the [RELAX NG](http://www.relaxng.org) schema `spring-security-x.y.rnc` i
 Changes to the XML schema will be overwritten by the Gradle build task.
 
 # Squash commits
-Use git rebase --interactive, git add --patch and other tools to "squash" multiple commits into atomic changes. In addition to the man pages for git, there are many resources online to help you understand how these tools work. Here is one: http://book.git-scm.com/4_interactive_rebasing.html.
+Use `git rebase --interactive`, `git add --patch` and other tools to "squash" multiple commits into atomic changes. In addition to the man pages for git, there are many resources online to help you understand how these tools work. Here from the [Git SCM Book](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History).
 
 # Use real name in git commits
 Please configure git to use your real first and last name for any commits you intend to submit as pull requests. For example, this is not acceptable:

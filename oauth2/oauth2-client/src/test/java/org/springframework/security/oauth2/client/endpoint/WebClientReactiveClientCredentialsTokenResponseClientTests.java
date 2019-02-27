@@ -28,8 +28,11 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.registration.TestClientRegistrations;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenResponse;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.*;
 
 /**
  * @author Rob Winch
@@ -54,6 +57,7 @@ public class WebClientReactiveClientCredentialsTokenResponseClientTests {
 
 	@After
 	public void cleanup() throws Exception {
+		validateMockitoUsage();
 		this.server.shutdown();
 	}
 
@@ -116,6 +120,48 @@ public class WebClientReactiveClientCredentialsTokenResponseClientTests {
 		assertThat(response.getAccessToken().getScopes()).isEqualTo(registration.getScopes());
 	}
 
+	@Test(expected=IllegalArgumentException.class)
+	public void setWebClientNullThenIllegalArgumentException(){
+		client.setWebClient(null);
+	}
+
+	@Test
+	public void setWebClientCustomThenCustomClientIsUsed() {
+		WebClient customClient = mock(WebClient.class);
+		when(customClient.post()).thenReturn(WebClient.builder().build().post());
+
+		this.client.setWebClient(customClient);
+		ClientRegistration registration = this.clientRegistration.build();
+		enqueueJson("{\n"
+				+ "  \"access_token\":\"MTQ0NjJkZmQ5OTM2NDE1ZTZjNGZmZjI3\",\n"
+				+ "  \"token_type\":\"bearer\",\n"
+				+ "  \"expires_in\":3600,\n"
+				+ "  \"refresh_token\":\"IwOGYzYTlmM2YxOTQ5MGE3YmNmMDFkNTVk\"\n"
+				+ "}");
+		OAuth2ClientCredentialsGrantRequest request = new OAuth2ClientCredentialsGrantRequest(registration);
+
+		OAuth2AccessTokenResponse response = this.client.getTokenResponse(request).block();
+
+		verify(customClient, atLeastOnce()).post();
+	}
+
+	@Test(expected = WebClientResponseException.class)
+	// gh-6089
+	public void getTokenResponseWhenInvalidResponse() throws WebClientResponseException {
+		ClientRegistration registration = this.clientRegistration.build();
+		enqueueUnexpectedResponse();
+
+		OAuth2ClientCredentialsGrantRequest request = new OAuth2ClientCredentialsGrantRequest(registration);
+
+		OAuth2AccessTokenResponse response = this.client.getTokenResponse(request).block();
+	}
+
+	private void enqueueUnexpectedResponse(){
+		MockResponse response = new MockResponse()
+				.setHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+				.setResponseCode(301);
+		this.server.enqueue(response);
+	}
 
 	private void enqueueJson(String body) {
 		MockResponse response = new MockResponse()

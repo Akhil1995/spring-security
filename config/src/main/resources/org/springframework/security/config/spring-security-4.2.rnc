@@ -748,7 +748,7 @@ csrf-options.attlist &=
 	## The RequestMatcher instance to be used to determine if CSRF should be applied. Default is any HTTP method except "GET", "TRACE", "HEAD", "OPTIONS"
 	attribute request-matcher-ref { xsd:token }?
 csrf-options.attlist &=
-	## The CsrfTokenRepository to use. The default is HttpSessionCsrfTokenRepository
+	## The CsrfTokenRepository to use. The default is HttpSessionCsrfTokenRepository wrapped by LazyCsrfTokenRepository.
 	attribute token-repository-ref { xsd:token }?
 
 headers =
@@ -770,7 +770,7 @@ hsts-options.attlist &=
 	## Specifies if subdomains should be included. Default true.
 	attribute include-subdomains {xsd:boolean}?
 hsts-options.attlist &=
-	## Specifies the maximum ammount of time the host should be considered a Known HSTS Host. Default one year.
+	## Specifies the maximum amount of time the host should be considered a Known HSTS Host. Default one year.
 	attribute max-age-seconds {xsd:integer}?
 hsts-options.attlist &=
 	## The RequestMatcher instance to be used to determine if the header should be set. Default is if HttpServletRequest.isSecure() is true.

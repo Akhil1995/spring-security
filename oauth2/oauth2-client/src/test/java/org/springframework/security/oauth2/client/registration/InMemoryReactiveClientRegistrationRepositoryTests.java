@@ -19,7 +19,10 @@ package org.springframework.security.oauth2.client.registration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -28,6 +31,7 @@ import reactor.test.StepVerifier;
 
 /**
  * @author Rob Winch
+ * @author Vedran Pavic
  * @since 5.1
  */
 public class InMemoryReactiveClientRegistrationRepositoryTests {
@@ -62,10 +66,30 @@ public class InMemoryReactiveClientRegistrationRepositoryTests {
 	}
 
 	@Test
-	public void constructorWhenClientRegistrationIsNullThenIllegalArgumentException() {
-		ClientRegistration registration = null;
-		assertThatThrownBy(() -> new InMemoryReactiveClientRegistrationRepository(registration))
+	public void constructorWhenClientRegistrationListHasNullThenIllegalArgumentException() {
+		List<ClientRegistration> registrations = Arrays.asList(null, registration);
+		assertThatThrownBy(() -> new InMemoryReactiveClientRegistrationRepository(registrations))
 				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	public void constructorWhenClientRegistrationIsNullThenIllegalArgumentException() {
+		assertThatThrownBy(() -> new InMemoryReactiveClientRegistrationRepository(registration, null))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	public void constructorWhenClientRegistrationMapIsNullThenIllegalArgumentException() {
+		Map<String, ClientRegistration> registrations = null;
+		assertThatThrownBy(() -> new InMemoryReactiveClientRegistrationRepository(registrations))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	public void constructorWhenClientRegistrationMapIsEmptyThenRepositoryIsEmpty() {
+		InMemoryReactiveClientRegistrationRepository repository = new InMemoryReactiveClientRegistrationRepository(
+				new HashMap<>());
+		assertThat(repository).isEmpty();
 	}
 
 	@Test
